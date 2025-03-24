@@ -17,43 +17,35 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Créer un fichier de configuration Docker pour l'authentification
-      - name: Prepare Docker config for GHCR
-        run: |
-          echo '{
-            "auths": {
-              "ghcr.io": {
-                "auth": "'$(echo -n ${{ github.repository_owner }}:${{ secrets.GITHUB_TOKEN }} | base64)'"
-              }
-            }
-          }' > /tmp/docker-config.json
-
-      # Déterminer les tags pour l'image
-      - name: Set image tags
-        id: tags
-        run: |
-          REPO="ghcr.io/${{ github.repository }}"
-          if [[ $GITHUB_REF == refs/tags/* ]]; then
-            VERSION=${GITHUB_REF#refs/tags/}
-            echo "TAGS=${REPO}:${VERSION},${REPO}:latest" >> $GITHUB_OUTPUT
-          elif [[ $GITHUB_REF == refs/heads/* ]]; then
-            BRANCH=${GITHUB_REF#refs/heads/}
-            SAFE_BRANCH=$(echo ${BRANCH} | tr '/' '-')
-            echo "TAGS=${REPO}:${SAFE_BRANCH},${REPO}:sha-$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
-          else
-            echo "TAGS=${REPO}:sha-$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
-          fi
-
-      # Utiliser Kaniko pour construire et publier l'image
-      - name: Build and push with Kaniko
-        uses: aevea/action-kaniko@v0.10.0
+      # Configuration pour l'authentification à GHCR
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
-          image: ${{ github.repository }}
-          tags: ${{ steps.tags.outputs.TAGS }}
-          cache: true
-          cache_registry: ghcr.io/${{ github.repository_owner }}/cache
-          build_file: Dockerfile
-          extra_args: "--use-new-run"
+
+      # Déterminer les tags pour l'image
+      - name: Set image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=tag
+            type=sha,format=short
+
+      # Utiliser Kaniko directement via un conteneur
+      - name: Build and push with Kaniko
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          platforms: linux/amd64
+          # Utiliser Kaniko comme builder
+          builder: gcr.io/kaniko-project/executor:v1.9.1
+          build-args: |
+            BUILDKIT_INLINE_CACHE=1
