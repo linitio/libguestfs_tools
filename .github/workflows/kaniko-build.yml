@@ -1,11 +1,11 @@
-name: Build and Push Docker Image with Kaniko
+name: Build and Push Docker Image
 
 on:
   push:
     branches:
-      - '*'  # Se déclenche à chaque push sur n'importe quelle branche
+      - '*'
     tags:
-      - '*'  # Se déclenche aussi avec les tags
+      - '*'
 
 jobs:
   build:
@@ -14,34 +14,39 @@ jobs:
       contents: read
       packages: write
     
-    container:
-      image: gcr.io/kaniko-project/executor:v1.23.2-debug
-      options: --entrypoint=""
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          repository: linitio/libguestfs_tools # Conservé si nécessaire
 
-      - name: Prepare Docker config
-        # Création du fichier de configuration pour l'authentification à GHCR
-        run: |
-          mkdir -p /kaniko/.docker
-          echo '{"auths":{"ghcr.io":{"username":"${{ github.repository_owner }}","password":"${{ secrets.GITHUB_TOKEN }}"}}}' > /kaniko/.docker/config.json
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-      - name: Build and push with Kaniko
-        # Commande équivalente à celle de votre GitLab CI
-        run: |
-          # Définir le tag en fonction du type de référence (branche ou tag)
-          TAG_NAME=""
-          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
-            TAG_NAME="${{ github.ref_name }}"
-          else
-            # Pour les branches, on utilise le nom de la branche
-            TAG_NAME="${{ github.ref_name }}"
-          fi
-          
-          /kaniko/executor \
-            --context "${{ github.workspace }}" \
-            --dockerfile "${{ github.workspace }}/Dockerfile" \
-            --destination "ghcr.io/${{ github.repository }}:${TAG_NAME}" \
-            --destination "ghcr.io/${{ github.repository }}:latest"
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=tag
+            type=sha,format=short,prefix=
+            latest
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
