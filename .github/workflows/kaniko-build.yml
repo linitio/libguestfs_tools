@@ -1,0 +1,59 @@
+name: Build and Push Docker Image with Kaniko
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*.*.*' ]
+  workflow_dispatch:
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Créer un fichier de configuration Docker pour l'authentification
+      - name: Prepare Docker config for GHCR
+        run: |
+          echo '{
+            "auths": {
+              "ghcr.io": {
+                "auth": "'$(echo -n ${{ github.repository_owner }}:${{ secrets.GITHUB_TOKEN }} | base64)'"
+              }
+            }
+          }' > /tmp/docker-config.json
+
+      # Déterminer les tags pour l'image
+      - name: Set image tags
+        id: tags
+        run: |
+          REPO="ghcr.io/${{ github.repository }}"
+          if [[ $GITHUB_REF == refs/tags/* ]]; then
+            VERSION=${GITHUB_REF#refs/tags/}
+            echo "TAGS=${REPO}:${VERSION},${REPO}:latest" >> $GITHUB_OUTPUT
+          elif [[ $GITHUB_REF == refs/heads/* ]]; then
+            BRANCH=${GITHUB_REF#refs/heads/}
+            SAFE_BRANCH=$(echo ${BRANCH} | tr '/' '-')
+            echo "TAGS=${REPO}:${SAFE_BRANCH},${REPO}:sha-$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+          else
+            echo "TAGS=${REPO}:sha-$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+          fi
+
+      # Utiliser Kaniko pour construire et publier l'image
+      - name: Build and push with Kaniko
+        uses: aevea/action-kaniko@v0.10.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+          image: ${{ github.repository }}
+          tags: ${{ steps.tags.outputs.TAGS }}
+          cache: true
+          cache_registry: ghcr.io/${{ github.repository_owner }}/cache
+          build_file: Dockerfile
+          extra_args: "--use-new-run"
